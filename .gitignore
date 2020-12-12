@@ -1,0 +1,14 @@
+.maps/
+.log/
+.tmp/
+*.log
+*test*
+
+.settings/
+.vscode/
+.classpath
+.project
+eclipse-formatter.xml
+
+target/
+test/
