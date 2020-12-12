@@ -4,10 +4,12 @@ import static org.lwjgl.glfw.Callbacks.glfwFreeCallbacks;
 import static org.lwjgl.glfw.GLFW.GLFW_FALSE;
 import static org.lwjgl.glfw.GLFW.GLFW_MAXIMIZED;
 import static org.lwjgl.glfw.GLFW.GLFW_RESIZABLE;
+import static org.lwjgl.glfw.GLFW.GLFW_TRUE;
 import static org.lwjgl.glfw.GLFW.GLFW_VISIBLE;
 import static org.lwjgl.glfw.GLFW.glfwCreateWindow;
 import static org.lwjgl.glfw.GLFW.glfwDefaultWindowHints;
 import static org.lwjgl.glfw.GLFW.glfwDestroyWindow;
+import static org.lwjgl.glfw.GLFW.glfwHideWindow;
 import static org.lwjgl.glfw.GLFW.glfwInit;
 import static org.lwjgl.glfw.GLFW.glfwMakeContextCurrent;
 import static org.lwjgl.glfw.GLFW.glfwSetCursorPosCallback;
@@ -16,7 +18,6 @@ import static org.lwjgl.glfw.GLFW.glfwSetKeyCallback;
 import static org.lwjgl.glfw.GLFW.glfwSetMouseButtonCallback;
 import static org.lwjgl.glfw.GLFW.glfwSetScrollCallback;
 import static org.lwjgl.glfw.GLFW.glfwSetWindowCloseCallback;
-import static org.lwjgl.glfw.GLFW.glfwSetWindowPosCallback;
 import static org.lwjgl.glfw.GLFW.glfwSetWindowSize;
 import static org.lwjgl.glfw.GLFW.glfwSetWindowSizeCallback;
 import static org.lwjgl.glfw.GLFW.glfwSetWindowTitle;
@@ -31,27 +32,38 @@ import static org.lwjgl.system.MemoryUtil.NULL;
 import java.util.HashMap;
 import java.util.Map;
 
-import com.github.fahjulian.windoweventsystem.util.Color;
+import com.github.fahjulian.windoweventsystem.event.EventDispatcher;
+import com.github.fahjulian.windoweventsystem.event.window.ApplicationTerminatedEvent;
+import com.github.fahjulian.windoweventsystem.event.window.WindowClosedEvent;
+import com.github.fahjulian.windoweventsystem.event.window.WindowResizedEvent;
 
 import org.lwjgl.glfw.GLFWErrorCallback;
 
 public final class Window {
     
-    private final long ID;
-    private final Mouse MOUSE;
-    private final Keyboard KEYBOARD;
+    public final long ID;
+    public final Mouse mouse;
+    public final Keyboard keyboard;
+    public final EventDispatcher<WindowClosedEvent> onWindowClosed;
+    public final EventDispatcher<WindowResizedEvent> onWindowResized;
 
     private String title;
     private int width;
     private int height;
+    private boolean terminatesAppOnClose;
+    private boolean visible;
+    private boolean closed;
+
+    public static EventDispatcher<ApplicationTerminatedEvent> onApplicationTerminated;
 
     private static final Map<Long, Window> allWindows;
     
     static {
         allWindows = new HashMap<>();
+        onApplicationTerminated = new EventDispatcher<>();
     }
 
-    public Window(String title, int width, int height, Color clearColor) {
+    public Window(String title, int width, int height) {
         if (allWindows.size() == 0) {   // glfw has not been initialized
             glfwSetErrorCallback((error, description) -> {
                 System.out.printf("GLFW Error: %s%n", GLFWErrorCallback.getDescription(description));
@@ -63,27 +75,27 @@ public final class Window {
 
         glfwDefaultWindowHints();
         glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
-        glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+        glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
         glfwWindowHint(GLFW_MAXIMIZED, GLFW_FALSE);
         
         this.ID = glfwCreateWindow(width, height, title, NULL, NULL);
         this.width = width;
         this.height = height;
-        this.MOUSE = new Mouse();
-        this.KEYBOARD = new Keyboard();
+        this.mouse = new Mouse(this);
+        this.keyboard = new Keyboard();
+        this.onWindowClosed = new EventDispatcher<>();
+        this.onWindowResized = new EventDispatcher<>();
 
         glfwMakeContextCurrent(this.ID);
         glfwSwapInterval(1);
         createCapabilities();
-        glClearColor(clearColor.r, clearColor.g, clearColor.b, clearColor.a);
-        glfwShowWindow(this.ID);
+        glClearColor(0.2f, 0.2f, 0.2f, 0.2f);
 
-        glfwSetCursorPosCallback(this.ID, this.MOUSE::cursorPosCallback);
-        glfwSetMouseButtonCallback(this.ID, this.MOUSE::buttonCallback);
-        glfwSetScrollCallback(this.ID, this.MOUSE::scrollCallback);
-        glfwSetKeyCallback(this.ID, this.KEYBOARD::keyCallback);
+        glfwSetCursorPosCallback(this.ID, this.mouse::cursorPosCallback);
+        glfwSetMouseButtonCallback(this.ID, this.mouse::buttonCallback);
+        glfwSetScrollCallback(this.ID, this.mouse::scrollCallback);
+        glfwSetKeyCallback(this.ID, this.keyboard::keyCallback);
         glfwSetWindowSizeCallback(this.ID, this::windowSizeCallback);
-        glfwSetWindowPosCallback(this.ID, this::windowPosCallback);
         glfwSetWindowCloseCallback(this.ID, this::windowCloseCallback);
 
         allWindows.put(this.ID, this);
@@ -92,12 +104,7 @@ public final class Window {
     public void destroy() {
         glfwFreeCallbacks(this.ID);
         glfwDestroyWindow(this.ID);
-
         allWindows.remove(this.ID);
-        if (allWindows.size() == 0) {
-            glfwTerminate();
-            glfwSetErrorCallback(null).free();
-        }
     }
 
     public float getWidth() {
@@ -108,6 +115,14 @@ public final class Window {
         return height;
     }
 
+    public void setWidth(int width) {
+        glfwSetWindowSize(this.ID, width, this.height);
+    }
+
+    public void setHeight(int height) {
+        glfwSetWindowSize(this.ID, this.width, height);
+    }
+    
     public void setSize(int width, int height) {
         glfwSetWindowSize(this.ID, width, height);
     }
@@ -120,23 +135,47 @@ public final class Window {
         glfwSetWindowTitle(this.ID, title);
     }
 
-    public long getID() {
-        return this.ID;
+    public void setTerminatesAppOnClose(boolean terminatesAppOnClose) {
+        this.terminatesAppOnClose = terminatesAppOnClose;
+    }
+
+    public void setClearColor(float r, float g, float b, float a) {
+        glfwMakeContextCurrent(this.ID);
+        glClearColor(r, g, b, a);
+    }
+
+    public boolean isVisible() {
+        return this.visible;
+    }
+
+    public boolean isClosed() {
+        return this.closed;
+    }
+
+    public void setVisible(boolean b) {
+        if (b && !this.visible)
+            glfwShowWindow(this.ID);
+        if (!b && this.visible)
+            glfwHideWindow(this.ID);
+        this.visible = b;
+    }
+
+    public static void terminateGLFW() {
+        glfwTerminate();
+        glfwSetErrorCallback(null).free();
     }
 
     private void windowSizeCallback(long window, int width, int height) {
-        
-    }
-
-    private void windowPosCallback(long window, int posX, int posY) {
-
+        this.onWindowResized.dispatch(new WindowResizedEvent(width, height));
     }
 
     private void windowCloseCallback(long window) {
-
-    }
-
-    public static Window getWindowByID(long id) {
-        return allWindows.get(id);
+        this.onWindowClosed.dispatch(new WindowClosedEvent());
+        this.closed = true;
+        this.destroy();
+        
+        if (this.terminatesAppOnClose || allWindows.size() == 0) {
+            Window.onApplicationTerminated.dispatch(new ApplicationTerminatedEvent());
+        }
     }
 }
